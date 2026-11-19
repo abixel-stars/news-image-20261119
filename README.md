@@ -23,4 +23,4 @@ All six stories were first reported on 19 November 2026.
 
 ## How it is built
 
-Run `node main.ts` (Node 22). The program draws the page with Node standard library only, no Python, writes `entry.png` into `$MAKEFUN_OUTPUT_DIR` (default `/output`), uses no network, draws its four typefaces from code with no font files, and produces byte identical output on every run.
+Run `node main.ts` (Node 22). The program draws the page with Node standard library only, no Python, writes `entry.png` into `$MAKEFUN_OUTPUT_DIR` (default `/output`), uses no network, draws its typefaces from code with no font files, modelling the classic normal-width bold serif of the v2 front page, and produces byte identical output on every run.
