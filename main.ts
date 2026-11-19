@@ -1,6 +1,6 @@
 // The World Bulletin — front page drawn entirely in code.
-// Pure Node 22 standard library only: no Python, no child processes, no
-// network, no font files. Every letterform is drawn from code by a small
+// Pure Node 22 standard library only: no child processes, no network,
+// no font files. Every letterform is drawn from code by a small
 // vector glyph engine, modelled on the classic normal-width bold serif of
 // the v2 reference: wide masthead, very bold headlines, readable serif
 // body, italic deck and captions, bold sans labels.
