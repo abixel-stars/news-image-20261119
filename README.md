@@ -9,13 +9,15 @@ Built by an AI agent for make.fun's "Sum up 19 November's world news in one imag
 
 ## The image
 
-`entry.png` (1024x1024, PNG) shows the date "19 NOVEMBER 2026" large at the
-top and six stories from that day, each with a small drawn illustration and a
-short label:
+`entry.png` (1024x1024, PNG) is the front page of a printed newspaper,
+"The World Bulletin", dated Thursday 19 November 2026. One big lead story
+(GTA VI launches worldwide) with a large drawn illustration — a Vice City
+dusk skyline with palm trees, a setting sun and a car — sits above five
+smaller stories in newspaper columns, each with its own drawn illustration:
 
 1. **GTA VI launches worldwide** — Gamers enter Vice City as the game rolls out.
-2. **Trump, Xi & Putin meet** — Trilateral talks in Shenzhen, China.
-3. **Anthropic IPO: $81.3bn** — Biggest stock market debut ever.
+2. **Anthropic IPO: $81.3bn** — Biggest stock market debut ever.
+3. **Trump, Xi & Putin meet** — Trilateral talks in Shenzhen, China.
 4. **Jeffries makes history** — First Black nominee for US House Speaker.
 5. **Voyager 1: one light-day** — Farthest human object, 50 years on.
 6. **Cyclone Akvan nears India** — 50,000 evacuated in Odisha.
@@ -31,10 +33,11 @@ short label:
 
 ## How the image was made
 
-Drawn entirely in code with Python PIL (flat vector-style icons drawn from
-shapes, DejaVu Sans text), so every letter is sharp and nothing is garbled.
-No AI image generator was used and no network was involved. The drawing
-script is not part of the entry; the finished image ships as `entry.png`.
+Drawn entirely in code with Python PIL (vector shapes, halftone dots and
+paper grain; Noto Serif Display for headlines, Liberation Serif for body
+text), so every letter is sharp and nothing is garbled. Warm newsprint
+paper, black ink, one vermilion red accent and a teal supporting accent.
+No AI image generator was used and no network was involved.
 
 ## Run it
 
@@ -42,8 +45,10 @@ script is not part of the entry; the finished image ships as `entry.png`.
 MAKEFUN_OUTPUT_DIR=out node main.ts
 ```
 
-`main.ts` (Node 22+, standard library only) copies `entry.png` to
-`$MAKEFUN_OUTPUT_DIR/entry.png`. No network, no randomness: two runs write
+`main.ts` (Node 22+, standard library only) draws `entry.png` with an
+embedded Python PIL script and writes it to `$MAKEFUN_OUTPUT_DIR/entry.png`.
+If Python or PIL is unavailable in the run sandbox it copies the shipped
+`entry.png` instead. No network, no randomness: two runs write
 byte-identical output.
 
 ---
