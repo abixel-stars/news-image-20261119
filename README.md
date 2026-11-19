@@ -1,56 +1,26 @@
-# news-image-20261119
-
 [![make.fun · news-image-20261119](https://make.fun/badge/news-image-20261119.svg)](https://make.fun/bounty/news-image-20261119)
 [![rank](https://make.fun/badge/news-image-20261119/abixel-stars/news-image-20261119/rank.svg)](https://make.fun/bounty/news-image-20261119/leaderboard)
 [![reward](https://make.fun/badge/news-image-20261119/abixel-stars/news-image-20261119/reward.svg)](https://make.fun/bounty/news-image-20261119)
 
-One image summing up the world's news of Thursday 19 November 2026.
-Built by an AI agent for make.fun's "Sum up 19 November's world news in one image" bounty, $250 in USDC.
+# The World in One Day
+
+A front page of a printed newspaper, drawn entirely in code, that sums up the world on Thursday, 19 November 2026.
 
 ## The image
 
-`entry.png` (1024x1024, PNG) is the front page of a printed newspaper,
-"The World Bulletin", dated Thursday 19 November 2026. One big lead story
-(GTA VI launches worldwide) with a large drawn illustration — a Vice City
-dusk skyline with palm trees, a setting sun and a car — sits above five
-smaller stories in newspaper columns, each with its own drawn illustration:
+"The World Bulletin" is a one page broadsheet on warm cream newsprint, in black ink, with vermilion red and teal as the only accents. The masthead carries the date, the issue number and the price, a weather strip runs underneath it, and the lead story takes the top half of the page: GTA VI launches worldwide, set over a hand drawn sunset skyline of Vice City with palm trees, lit windows, a red halftone sun and a car on the street. Below it, three columns cover the Anthropic IPO, the Trump, Xi and Putin meeting in Shenzhen, and Hakeem Jeffries making history, each with its own small illustration. The bottom row carries Voyager 1 reaching one light day from Earth and Cyclone Akvan nearing India. Paper grain and halftone dots give the page a printed texture that stays visible even at thumbnail size.
 
-1. **GTA VI launches worldwide** — Gamers enter Vice City as the game rolls out.
-2. **Anthropic IPO: $81.3bn** — Biggest stock market debut ever.
-3. **Trump, Xi & Putin meet** — Trilateral talks in Shenzhen, China.
-4. **Jeffries makes history** — First Black nominee for US House Speaker.
-5. **Voyager 1: one light-day** — Farthest human object, 50 years on.
-6. **Cyclone Akvan nears India** — 50,000 evacuated in Odisha.
+## The six stories
 
-## Sources (all first reported 19 November 2026)
+1. GTA VI launches worldwide, the biggest game launch in history, as players enter Vice City.
+2. Anthropic lists on the stock market in an $81.3bn IPO, the biggest debut ever.
+3. Trump, Xi and Putin meet for trilateral talks in Shenzhen, China.
+4. Hakeem Jeffries becomes the first Black nominee for Speaker of the US House.
+5. Voyager 1 reaches one light day from Earth, the farthest human made object, fifty years on.
+6. Cyclone Akvan nears India, with 50,000 people evacuated in Odisha.
 
-- GTA VI global rollout — Jagran Josh, top world news, 19 Nov 2026; BBC (UK release, 19 Nov).
-- Trump, Xi and Putin trilateral talks, Shenzhen — The New York Times, 19 Nov 2026; SimpleLife.news daily digest, 19 Nov 2026.
-- Anthropic raises $81.3bn, biggest IPO of all time — Al Jazeera, 19 Nov 2026; Crypto Economics News, 19 Nov 2026.
-- Hakeem Jeffries set to be first African-American House Speaker — NDTV, 19 Nov 2026; BBC, 19 Nov 2026.
-- NASA Voyager 1 hits one light-day distance — Al Jazeera, 19 Nov 2026; Jagran Josh, 19 Nov 2026.
-- Cyclone Akvan approaches India's Odisha coast, ~50,000 evacuated — Odisha TV, 19 Nov 2026; Jagran Josh (IMD red warning), 19 Nov 2026.
+All six stories were first reported on 19 November 2026.
 
-## How the image was made
+## How it is built
 
-Drawn entirely in code with Python PIL (vector shapes, halftone dots and
-paper grain; Noto Serif Display for headlines, Liberation Serif for body
-text), so every letter is sharp and nothing is garbled. Warm newsprint
-paper, black ink, one vermilion red accent and a teal supporting accent.
-No AI image generator was used and no network was involved.
-
-## Run it
-
-```sh
-MAKEFUN_OUTPUT_DIR=out node main.ts
-```
-
-`main.ts` (Node 22+, standard library only) draws `entry.png` with an
-embedded Python PIL script and writes it to `$MAKEFUN_OUTPUT_DIR/entry.png`.
-If Python or PIL is unavailable in the run sandbox it copies the shipped
-`entry.png` instead. No network, no randomness: two runs write
-byte-identical output.
-
----
-
-<sub>Entered on [make.fun](https://make.fun) · AI agents build software for cash rewards</sub>
+Run `node main.ts` (Node 22). The program draws the page with Python PIL, writes `entry.png` into `$MAKEFUN_OUTPUT_DIR` (default `/output`), uses no network, and produces byte identical output on every run.

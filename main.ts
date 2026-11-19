@@ -1,375 +1,333 @@
-import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+// The World Bulletin - front page for 19 November 2026.
+// Node 22 entrypoint: renders the bulletin with Python PIL and writes
+// entry.png into MAKEFUN_OUTPUT_DIR (default /output). No network,
+// fully deterministic: same bytes on every run.
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const OUT_DIR = process.env.MAKEFUN_OUTPUT_DIR || "/output";
-const TARGET = join(OUT_DIR, "entry.png");
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
-const DRAW_PY = `import math
+const OUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+
+const PY = `
 import os
 import random
 import sys
-
 from PIL import Image, ImageDraw, ImageFont
 
 W = 1024
 H = 1024
-OUT_PATH = os.path.join(sys.argv[1], "entry.png")
+PAPER = (244, 238, 220)
+INK = (26, 24, 20)
+VERM = (196, 44, 26)
+TEAL = (13, 109, 104)
+CREAM = (255, 250, 238)
+SPECK_DARK = (96, 86, 64)
+SPECK_LT = (255, 251, 240)
 
-PAPER = (243, 233, 207)
-INK = (26, 23, 18)
-RED = (178, 34, 24)
-TEAL = (23, 92, 86)
-CREAM = (247, 240, 218)
-SPECK = (226, 214, 186)
-SPECK_D = (110, 98, 72)
+SERIF_B = "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
+SERIF = "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"
+SERIF_I = "/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf"
+SANS_B = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
-SERIF_BLACK = "/usr/share/fonts/truetype/noto/NotoSerifDisplay-Black.ttf"
-SERIF = "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"
-SERIF_IT = "/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf"
-SANS = "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
-SANS_B = "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"
+_cache = {}
 
-def load_fonts():
-    try:
-        return {
-            "mast": ImageFont.truetype(SERIF_BLACK, 58),
-            "lead": ImageFont.truetype(SERIF_BLACK, 62),
-            "h2": ImageFont.truetype(SERIF_BLACK, 25),
-            "h3": ImageFont.truetype(SERIF_BLACK, 26),
-            "kick": ImageFont.truetype(SANS_B, 13),
-            "kick_lead": ImageFont.truetype(SANS_B, 15),
-            "deck": ImageFont.truetype(SERIF_IT, 19),
-            "body": ImageFont.truetype(SERIF, 15),
-            "cap": ImageFont.truetype(SERIF_IT, 13),
-            "date": ImageFont.truetype(SANS_B, 16),
-            "meta": ImageFont.truetype(SANS, 13),
-            "meta_b": ImageFont.truetype(SANS_B, 13),
-            "foot": ImageFont.truetype(SANS, 12),
-        }
-    except OSError:
-        sys.exit(3)
+def load_font(paths, size):
+    if isinstance(paths, str):
+        paths = [paths]
+    key = (tuple(paths), size)
+    if key not in _cache:
+        got = None
+        for p in paths:
+            try:
+                got = ImageFont.truetype(p, size)
+                break
+            except Exception:
+                continue
+        if got is None:
+            got = ImageFont.load_default()
+        _cache[key] = got
+    return _cache[key]
 
-def wrap(d, text, f, maxw):
+def fit_font(draw, paths, start, text, max_w):
+    size = start
+    while size > 10:
+        f = load_font(paths, size)
+        if draw.textlength(text, font=f) <= max_w:
+            return f
+        size -= 2
+    return load_font(paths, 10)
+
+def wrap(draw, text, fnt, max_w):
     lines = []
     cur = ""
     for word in text.split(" "):
-        trial = word if cur == "" else cur + " " + word
-        if d.textlength(trial, font=f) <= maxw:
+        trial = (cur + " " + word).strip()
+        if draw.textlength(trial, font=fnt) <= max_w:
             cur = trial
         else:
-            if cur != "":
+            if cur:
                 lines.append(cur)
             cur = word
-    if cur != "":
+    if cur:
         lines.append(cur)
     return lines
 
-def tracked(d, x, y, text, f, fill, tr):
-    cx = x
-    for ch in text:
-        d.text((cx, y), ch, font=f, fill=fill)
-        cx += d.textlength(ch, font=f) + tr
-    return cx - tr
+def draw_lines(draw, x, y, lines, fnt, fill, lh):
+    for line in lines:
+        draw.text((x, y), line, font=fnt, fill=fill)
+        y += lh
+    return y
 
-def tracked_width(d, text, f, tr):
-    total = 0
-    for ch in text:
-        total += d.textlength(ch, font=f) + tr
-    return total - tr
+def centered(draw, cx, y, text, fnt, fill):
+    w = draw.textlength(text, font=fnt)
+    draw.text((cx - w / 2, y), text, font=fnt, fill=fill)
 
-def tracked_center(d, cx, y, text, f, fill, tr):
-    w = tracked_width(d, text, f, tr)
-    tracked(d, cx - w / 2, y, text, f, fill, tr)
+def hline(draw, x0, x1, y, fill, width=1):
+    draw.line([(x0, y), (x1, y)], fill=fill, width=width)
 
-def halftone_sky(d, x0, y0, x1, y1):
-    spacing = 9
-    row = 0
-    yy = y0
-    while yy <= y1:
-        xx = x0 + (4 if row % 2 else 0)
-        while xx <= x1:
-            t = (yy - y0) / (y1 - y0)
-            r = 0.4 + 2.6 * t * t
-            if r > 0.5:
-                d.ellipse([xx - r, yy - r, xx + r, yy + r], fill=RED)
-            xx += spacing
-        yy += spacing
-        row += 1
+def vline(draw, x, y0, y1, fill, width=1):
+    draw.line([(x, y0), (x, y1)], fill=fill, width=width)
 
-def skyline(d, x0, x1, ground, seed):
-    rng = random.Random(seed)
-    x = x0
-    bi = 0
-    while x < x1:
-        bw = rng.randrange(46, 88)
-        if x + bw > x1:
-            bw = x1 - x
-        bh = rng.randrange(55, 105)
-        top = ground - bh
-        d.rectangle([x, top, x + bw, ground], fill=INK)
-        wy = top + 12
-        row = 0
-        while wy < ground - 10:
-            wx = x + 9
-            col = 0
-            while wx < x + bw - 8:
-                if (row + col + bi) % 3 == 0:
-                    d.rectangle([wx, wy, wx + 3, wy + 5], fill=CREAM)
-                wx += 11
-                col += 1
-            wy += 12
-            row += 1
-        if bi % 4 == 1:
-            ax = x + bw // 2
-            d.line([(ax, top), (ax, top - 16)], fill=INK, width=2)
-            d.ellipse([ax - 2, top - 20, ax + 2, top - 16], fill=RED)
-        x += bw
-        bi += 1
+def draw_bird(draw, x, y):
+    draw.line([(x, y), (x + 6, y - 5), (x + 12, y)], fill=INK, width=2)
 
-def palm(d, bx, by, lean, s):
-    pts = []
-    for i in range(9):
-        t = i / 8
-        px = bx + lean * t * t
-        py = by - 78 * s * t
-        pts.append((px, py))
-    d.line(pts, fill=INK, width=6)
-    cx = bx + lean
-    cy = by - 78 * s
-    for ang, droop, ln in [(205, 26, 62), (235, 20, 66), (262, 14, 60), (290, 14, 60), (318, 20, 64), (345, 26, 58)]:
-        a = math.radians(ang)
-        fpts = []
-        for i in range(8):
-            t = i / 7
-            fx = cx + math.cos(a) * ln * s * t
-            fy = cy + math.sin(a) * ln * s * t + droop * s * t * t
-            fpts.append((fx, fy))
-        d.line(fpts, fill=INK, width=4)
+def draw_palm(draw, cx, base_y, top_y, lean):
+    span = base_y - top_y
+    pts = [
+        (cx, base_y),
+        (cx + lean * 0.3, base_y - span * 0.4),
+        (cx + lean * 0.7, base_y - span * 0.75),
+        (cx + lean, top_y),
+    ]
+    draw.line(pts, fill=INK, width=6, joint="curve")
+    crown = (cx + lean, top_y)
+    for tip in [(-34, 14), (-28, -8), (-4, -24), (20, -12), (34, 10)]:
+        mid = (crown[0] + tip[0] * 0.55, crown[1] + tip[1] * 0.55 - 10)
+        end = (crown[0] + tip[0], crown[1] + tip[1])
+        draw.line([crown, mid, end], fill=INK, width=4, joint="curve")
 
-def lead_art(d):
-    x0, y0, x1, y1 = 36, 380, 988, 556
-    d.rectangle([x0, y0, x1, y1], outline=INK, width=2)
-    halftone_sky(d, x0 + 4, y0 + 4, x1 - 4, y1 - 22)
-    sx, sy, sr = 690, 438, 40
-    d.ellipse([sx - sr, sy - sr, sx + sr, sy + sr], fill=RED)
-    for dy in (-8, 6):
-        hw = math.sqrt(sr * sr - dy * dy)
-        d.rectangle([sx - hw, sy + dy, sx + hw, sy + dy + 3], fill=CREAM)
-    for bx, by in [(300, 420), (348, 406), (268, 448)]:
-        d.line([(bx - 7, by), (bx, by - 4), (bx + 7, by)], fill=INK, width=2)
-    skyline(d, x0 + 2, x1 - 2, 540, 7)
-    palm(d, 150, 540, -14, 1.15)
-    palm(d, 880, 540, 12, 1.0)
-    d.rectangle([x0 + 2, 540, x1 - 2, y1 - 2], fill=INK)
-    car = [(430, 551), (436, 541), (452, 537), (486, 537), (500, 543), (508, 551)]
-    d.polygon(car, fill=CREAM)
-    d.polygon([(452, 541), (462, 541), (462, 547), (452, 547)], fill=INK)
-    d.polygon([(468, 541), (482, 541), (482, 547), (468, 547)], fill=INK)
-    d.ellipse([440, 547, 452, 555], fill=INK)
-    d.ellipse([488, 547, 500, 555], fill=INK)
-    d.ellipse([443, 550, 449, 555], fill=CREAM)
-    d.ellipse([491, 550, 497, 555], fill=CREAM)
+def draw_skyline(draw, rng, tops, bottom):
+    for (bx, bw, top) in tops:
+        draw.rectangle([bx, top, bx + bw, bottom], fill=INK)
+        for wx in range(bx + 7, bx + bw - 4, 11):
+            for wy in range(top + 9, bottom - 6, 13):
+                if rng.random() < 0.38:
+                    draw.rectangle([wx, wy, wx + 3, wy + 4], fill=PAPER)
 
-def chart(d, x, y):
-    d.line([(x + 8, y + 58), (x + 296, y + 58)], fill=INK, width=2)
-    for bx, bh in [(30, 20), (100, 36), (170, 54)]:
-        d.rectangle([x + bx, y + 58 - bh, x + bx + 46, y + 58], fill=INK)
-    d.line([(x + 20, y + 46), (x + 250, y + 6)], fill=RED, width=4)
-    d.polygon([(x + 250, y + 6), (x + 232, y + 4), (x + 246, y + 20)], fill=RED)
-    for tx in (30, 100, 170):
-        d.line([(x + tx + 23, y + 58), (x + tx + 23, y + 62)], fill=INK, width=2)
+def draw_car(draw, x, y):
+    draw.rounded_rectangle([x, y, x + 68, y + 16], radius=6, fill=CREAM, outline=INK, width=2)
+    draw.polygon([(x + 14, y), (x + 22, y - 10), (x + 46, y - 10), (x + 54, y)],
+                 fill=CREAM, outline=INK)
+    draw.ellipse([x + 10, y + 12, x + 20, y + 22], fill=INK)
+    draw.ellipse([x + 48, y + 12, x + 58, y + 22], fill=INK)
 
-def globe(d, x, y):
-    cx, cy, r = x + 152, y + 32, 30
-    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=INK, width=2)
-    d.ellipse([cx - 13, cy - r, cx + 13, cy + r], outline=INK, width=1)
-    for dy in (-15, 0, 15):
-        hw = int(math.sqrt(r * r - dy * dy)) - 1
-        d.line([(cx - hw, cy + dy), (cx + hw, cy + dy)], fill=INK, width=1)
-    for px, py in [(cx - 14, cy - 12), (cx + 10, cy - 16), (cx + 16, cy + 10)]:
-        d.line([(px, py), (px, py - 6)], fill=RED, width=2)
-        d.ellipse([px - 3, py - 9, px + 3, py - 3], fill=RED)
-    d.arc([cx - 46, cy - 16, cx + 46, cy + 16], 300, 360, fill=TEAL, width=2)
-    d.arc([cx - 46, cy - 16, cx + 46, cy + 16], 0, 60, fill=TEAL, width=2)
+def draw_bars(draw, x, y_base):
+    heights = [22, 38, 54]
+    xs = [x + 8, x + 62, x + 116]
+    for bx, h in zip(xs, heights):
+        draw.rectangle([bx, y_base - h, bx + 34, y_base], fill=INK)
+    draw.line([(x, y_base), (x + 168, y_base)], fill=INK, width=2)
+    draw.line([(x + 2, y_base - 12), (x + 168, y_base - 58)], fill=VERM, width=4)
+    draw.polygon([(x + 168, y_base - 58), (x + 150, y_base - 56), (x + 162, y_base - 42)],
+                 fill=VERM)
 
-def capitol(d, x, y):
-    cx = x + 152
-    d.arc([cx - 46, y + 12, cx + 46, y + 58], 180, 360, fill=INK, width=3)
-    d.line([(cx, y + 12), (cx, y + 2)], fill=INK, width=2)
-    d.polygon([(cx, y + 2), (cx + 14, y + 5), (cx, y + 8)], fill=RED)
+def draw_globe(draw, cx, cy, r):
+    draw.ellipse([cx - r - 14, cy - 12, cx + r + 14, cy + 12], outline=TEAL, width=2)
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=PAPER, outline=INK, width=3)
+    draw.ellipse([cx - 13, cy - r, cx + 13, cy + r], outline=INK, width=2)
+    draw.line([(cx - r, cy), (cx + r, cy)], fill=INK, width=2)
+    draw.ellipse([cx - r, cy - 12, cx + r, cy + 12], outline=INK, width=2)
+    for (dx, dy) in [(-12, -10), (8, -14), (12, 10)]:
+        draw.ellipse([cx + dx - 3, cy + dy - 3, cx + dx + 3, cy + dy + 3], fill=VERM)
+
+def draw_capitol(draw, x, y_base):
+    draw.pieslice([x + 38, y_base - 52, x + 130, y_base - 4], 180, 360, fill=INK)
+    draw.rectangle([x + 78, y_base - 62, x + 90, y_base - 50], fill=INK)
+    draw.line([(x + 84, y_base - 68), (x + 84, y_base - 62)], fill=INK, width=2)
+    draw.polygon([(x + 84, y_base - 68), (x + 84, y_base - 60), (x + 98, y_base - 64)],
+                 fill=VERM)
     for i in range(5):
-        colx = cx - 40 + i * 18
-        d.rectangle([colx, y + 38, colx + 8, y + 58], fill=INK)
-    d.line([(cx - 52, y + 60), (cx + 52, y + 60)], fill=INK, width=2)
+        cx = x + 44 + i * 20
+        draw.rectangle([cx, y_base - 22, cx + 8, y_base], fill=INK)
+    draw.line([(x + 30, y_base), (x + 138, y_base)], fill=INK, width=2)
+    draw.line([(x + 26, y_base + 4), (x + 142, y_base + 4)], fill=INK, width=1)
 
-def voyager(d, x, y):
-    d.rounded_rectangle([x, y, x + 150, y + 108], radius=6, fill=INK)
-    rng = random.Random(99)
-    for _ in range(16):
-        sx = x + rng.randrange(6, 144)
-        sy = y + rng.randrange(6, 102)
-        r = rng.choice([1, 1, 2])
-        d.ellipse([sx - r, sy - r, sx + r, sy + r], fill=CREAM)
-    p0 = (x + 16, y + 94)
-    pc = (x + 28, y + 56)
-    p1 = (x + 64, y + 62)
-    for i in range(13):
-        t = i / 12
-        qx = (1 - t) * (1 - t) * p0[0] + 2 * (1 - t) * t * pc[0] + t * t * p1[0]
-        qy = (1 - t) * (1 - t) * p0[1] + 2 * (1 - t) * t * pc[1] + t * t * p1[1]
-        d.ellipse([qx - 2, qy - 2, qx + 2, qy + 2], fill=CREAM)
-    d.rectangle([x + 88, y + 48, x + 104, y + 60], fill=CREAM)
-    d.polygon([(x + 104, y + 44), (x + 126, y + 34), (x + 126, y + 62)], fill=CREAM)
-    d.line([(x + 88, y + 54), (x + 62, y + 64)], fill=CREAM, width=2)
-    d.line([(x + 96, y + 48), (x + 96, y + 34)], fill=CREAM, width=2)
-    d.ellipse([x + 94, y + 32, x + 98, y + 36], fill=CREAM)
-    d.ellipse([x + 132, y + 14, x + 138, y + 20], fill=RED)
+def draw_voyager(draw, rng, x0, y0, x1, y1):
+    draw.rounded_rectangle([x0, y0, x1, y1], radius=8, fill=INK)
+    for _ in range(14):
+        sx = rng.randint(x0 + 6, x1 - 6)
+        sy = rng.randint(y0 + 6, y1 - 6)
+        draw.point((sx, sy), fill=PAPER)
+    for t in range(0, 11):
+        px = x0 + 8 + t * 9
+        py = y1 - 8 - int((t * t) * 0.5)
+        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=PAPER)
+    draw.rectangle([x0 + 52, y0 + 26, x0 + 70, y0 + 40], fill=PAPER)
+    draw.line([(x0 + 52, y0 + 33), (x0 + 70, y0 + 33)], fill=INK, width=1)
+    draw.polygon([(x0 + 70, y0 + 26), (x0 + 70, y0 + 40), (x0 + 88, y0 + 33)],
+                 outline=PAPER, width=2)
+    draw.ellipse([x0 + 96, y0 + 18, x0 + 102, y0 + 24], fill=VERM)
 
-def cyclone(d, x, y):
-    cx, cy = x + 75, y + 46
-    pts = []
-    t = 0.0
-    while t <= 4.4 * math.pi:
-        r = 2 + 2.4 * t
-        pts.append((cx + r * math.cos(t), cy + r * math.sin(t) * 0.92))
-        t += 0.12
-    d.line(pts, fill=INK, width=3)
-    d.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], fill=RED)
-    for rx in [x + 18, x + 48, x + 78, x + 108, x + 132]:
-        d.line([(rx, y + 88), (rx - 4, y + 100)], fill=INK, width=2)
-    d.line([(x + 8, y + 12), (x + 40, y + 12)], fill=INK, width=2)
-    d.line([(x + 110, y + 16), (x + 142, y + 16)], fill=INK, width=2)
+def draw_cyclone(draw, cx, cy):
+    for i, r in enumerate([8, 14, 20, 26]):
+        start = 20 + i * 55
+        draw.arc([cx - r, cy - r, cx + r, cy + r], start, start + 250, fill=INK, width=3)
+    draw.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], fill=VERM)
+    for i in range(4):
+        x = cx - 42 + i * 28
+        draw.line([(x, cy + 32), (x - 5, cy + 40)], fill=INK, width=2)
 
-def main():
-    f = load_fonts()
+def build(out_path):
     img = Image.new("RGB", (W, H), PAPER)
     d = ImageDraw.Draw(img)
-    d.rectangle([12, 12, 1011, 1011], outline=INK, width=3)
-    d.rectangle([19, 19, 1004, 1004], outline=INK, width=1)
-    mw = d.textlength("THE WORLD BULLETIN", font=f["mast"])
-    d.text(((W - mw) / 2, 28), "THE WORLD BULLETIN", font=f["mast"], fill=INK)
-    d.line([(36, 102), (988, 102)], fill=INK, width=1)
-    d.text((36, 110), "No. 324", font=f["meta"], fill=INK)
-    tracked_center(d, 512, 108, "THURSDAY, 19 NOVEMBER 2026", f["date"], INK, 2)
-    rw = d.textlength("PRICE $1.50", font=f["meta_b"])
-    d.text((988 - rw, 110), "PRICE $1.50", font=f["meta_b"], fill=INK)
-    d.rectangle([36, 136, 988, 140], fill=INK)
-    d.line([(36, 146), (988, 146)], fill=INK, width=1)
-    d.text((36, 152), "WEATHER: VICE CITY 28\u00b0 CLEAR \u00b7 NEW YORK 12\u00b0 \u00b7 LONDON 9\u00b0", font=f["meta"], fill=TEAL)
+    rng = random.Random(20261119)
+
+    # Double outer border, like a printed front page.
+    d.rectangle([14, 14, 1010, 1010], outline=INK, width=3)
+    d.rectangle([22, 22, 1002, 1002], outline=INK, width=1)
+
+    # Masthead.
+    mast = fit_font(d, SERIF_B, 84, "THE WORLD BULLETIN", 952)
+    centered(d, 512, 44, "THE WORLD BULLETIN", mast, INK)
+    hline(d, 36, 988, 136, INK, 2)
+
+    # Dateline row.
+    d.text((36, 146), "No. 324", font=load_font(SANS, 19), fill=INK)
+    centered(d, 512, 144, "THURSDAY, 19 NOVEMBER 2026", load_font(SANS_B, 21), INK)
+    price = "PRICE $1.50"
+    pw = d.textlength(price, font=load_font(SANS, 19))
+    d.text((988 - pw, 146), price, font=load_font(SANS, 19), fill=INK)
+    hline(d, 36, 988, 182, INK, 4)
+    hline(d, 36, 988, 188, INK, 1)
+
+    # Weather strip and opinion teaser.
+    d.text((36, 196), "WEATHER: VICE CITY 28° CLEAR · NEW YORK 12° · LONDON 9°",
+           font=load_font(SANS_B, 15), fill=TEAL)
     op = "OPINION: THE DAY GAMES GREW UP"
-    ow = d.textlength(op, font=f["meta_b"])
-    d.text((988 - ow, 152), op, font=f["meta_b"], fill=INK)
-    tracked(d, 36, 176, "VICE CITY AWAITS \u00b7 OUT TODAY", f["kick_lead"], RED, 3)
-    d.text((36, 198), "GTA VI LAUNCHES", font=f["lead"], fill=INK)
-    d.text((36, 262), "WORLDWIDE", font=f["lead"], fill=INK)
-    deck_lines = wrap(d, "Gamers enter Vice City as the biggest game launch in history rolls out across the world today.", f["deck"], 952)
-    dy = 334
-    for ln in deck_lines:
-        d.text((36, dy), ln, font=f["deck"], fill=INK)
-        dy += 22
-    lead_art(d)
-    d.text((36, 564), "Sunset over Vice City: players take to the streets as the game opens worldwide today.", font=f["cap"], fill=INK)
-    d.line([(36, 594), (988, 594)], fill=INK, width=2)
+    ow = d.textlength(op, font=load_font(SANS_B, 15))
+    d.text((988 - ow, 196), op, font=load_font(SANS_B, 15), fill=INK)
+
+    # Lead story.
+    d.text((36, 222), "VICE CITY AWAITS · OUT TODAY",
+           font=load_font(SANS_B, 19), fill=VERM)
+    head = fit_font(d, SERIF_B, 92, "GTA VI LAUNCHES", 952)
+    d.text((36, 246), "GTA VI LAUNCHES", font=head, fill=INK)
+    d.text((36, 338), "WORLDWIDE", font=head, fill=INK)
+    deck = wrap(d, "Gamers enter Vice City as the biggest game launch in history rolls out across the world today.",
+                load_font([SERIF_I, SERIF], 22), 952)
+    draw_lines(d, 36, 436, deck, load_font([SERIF_I, SERIF], 22), INK, 28)
+
+    # Lead illustration: sunset over Vice City.
+    d.rectangle([36, 500, 988, 630], outline=INK, width=2)
+    for yy in range(506, 566, 13):
+        t = (yy - 506) / 60.0
+        r = 1.0 + 2.4 * t
+        for xx in range(44, 980, 13):
+            d.ellipse([xx - r, yy - r, xx + r, yy + r], fill=VERM)
+    sun_cx, sun_cy, sun_r = 838, 548, 40
+    d.ellipse([sun_cx - sun_r, sun_cy - sun_r, sun_cx + sun_r, sun_cy + sun_r], fill=VERM)
+    for dy in (-13, 0, 13):
+        d.rectangle([sun_cx - sun_r - 2, sun_cy + dy - 2, sun_cx + sun_r + 2, sun_cy + dy + 2],
+                    fill=PAPER)
+    tops = [(40, 58, 566), (98, 46, 546), (144, 66, 572), (210, 44, 552),
+            (254, 56, 574), (310, 50, 548), (360, 62, 568), (422, 46, 542),
+            (468, 58, 570), (526, 50, 554), (576, 62, 572), (638, 48, 546),
+            (686, 56, 566), (742, 50, 550), (792, 60, 570), (852, 46, 544),
+            (898, 56, 564), (954, 30, 556)]
+    draw_skyline(d, rng, tops, 626)
+    draw_palm(d, 92, 626, 540, -10)
+    draw_palm(d, 938, 626, 544, 10)
+    draw_car(d, 600, 600)
+    draw_bird(d, 300, 520)
+    draw_bird(d, 360, 512)
+    draw_bird(d, 700, 516)
+    d.text((36, 636), "Sunset over Vice City: players take to the streets as the game opens worldwide today.",
+           font=load_font([SERIF_I, SERIF], 17), fill=INK)
+
+    hline(d, 36, 988, 666, INK, 2)
+
+    # Three-column row: technology, diplomacy, politics.
+    vline(d, 354, 676, 888, INK, 1)
+    vline(d, 670, 676, 888, INK, 1)
     cols = [
-        (36, "TECHNOLOGY", "Anthropic IPO: $81.3bn", "Biggest stock market debut ever.", "chart"),
-        (360, "DIPLOMACY", "Trump, Xi & Putin Meet", "Trilateral talks in Shenzhen, China.", "globe"),
-        (684, "POLITICS", "Jeffries Makes History", "First Black nominee for US House Speaker.", "capitol"),
+        (36, 306, "TECHNOLOGY", "Anthropic IPO: $81.3bn",
+         "Biggest stock market debut ever.", "bars"),
+        (366, 292, "DIPLOMACY", "Trump, Xi & Putin Meet",
+         "Trilateral talks in Shenzhen, China.", "globe"),
+        (682, 306, "POLITICS", "Jeffries Makes History",
+         "First Black nominee for US House Speaker.", "capitol"),
     ]
-    for cx, kick, head, body, art in cols:
-        tracked(d, cx, 604, kick, f["kick"], RED, 2)
-        if art == "chart":
-            chart(d, cx, 626)
-        elif art == "globe":
-            globe(d, cx, 626)
+    for (cx, cw, kick, title, sub, kind) in cols:
+        d.text((cx, 676), kick, font=load_font(SANS_B, 17), fill=VERM)
+        if kind == "bars":
+            draw_bars(d, cx + 20, 760)
+        elif kind == "globe":
+            draw_globe(d, cx + cw // 2, 734, 30)
         else:
-            capitol(d, cx, 626)
-        hl = wrap(d, head, f["h2"], 304)
-        hy = 696
-        for ln in hl:
-            d.text((cx, hy), ln, font=f["h2"], fill=INK)
-            hy += 27
-        bl = wrap(d, body, f["body"], 304)
-        by = 754
-        for ln in bl:
-            d.text((cx, by), ln, font=f["body"], fill=INK)
-            by += 17
-    d.line([(350, 604), (350, 796)], fill=INK, width=1)
-    d.line([(674, 604), (674, 796)], fill=INK, width=1)
-    d.line([(36, 808), (988, 808)], fill=INK, width=2)
-    d.line([(512, 818), (512, 953)], fill=INK, width=1)
-    tracked(d, 36, 818, "SPACE", f["kick"], RED, 2)
-    voyager(d, 36, 844)
-    hl = wrap(d, "Voyager 1: One Light-Day", f["h3"], 306)
-    hy = 844
-    for ln in hl:
-        d.text((196, hy), ln, font=f["h3"], fill=INK)
-        hy += 28
-    bl = wrap(d, "Farthest human object, 50 years on.", f["body"], 306)
-    by = 902
-    for ln in bl:
-        d.text((196, by), ln, font=f["body"], fill=INK)
-        by += 17
-    tracked(d, 522, 818, "WEATHER", f["kick"], RED, 2)
-    cyclone(d, 522, 844)
-    hl = wrap(d, "Cyclone Akvan Nears India", f["h3"], 306)
-    hy = 844
-    for ln in hl:
-        d.text((682, hy), ln, font=f["h3"], fill=INK)
-        hy += 28
-    bl = wrap(d, "50,000 evacuated in Odisha.", f["body"], 306)
-    by = 902
-    for ln in bl:
-        d.text((682, by), ln, font=f["body"], fill=INK)
-        by += 17
-    d.line([(36, 968), (988, 968)], fill=INK, width=2)
-    foot = "All six stories first reported on 19 November 2026  \u00b7  The World Bulletin  \u00b7  Page 1"
-    fw = d.textlength(foot, font=f["foot"])
-    d.text(((W - fw) / 2, 976), foot, font=f["foot"], fill=INK)
-    grng = random.Random(20261119)
-    for _ in range(3800):
-        gx = grng.randrange(8, 1016)
-        gy = grng.randrange(8, 1016)
-        c = SPECK if grng.random() < 0.75 else SPECK_D
-        d.point((gx, gy), fill=c)
-    for _ in range(150):
-        gx = grng.randrange(8, 1014)
-        gy = grng.randrange(8, 1014)
-        d.rectangle([gx, gy, gx + 1, gy + 1], fill=SPECK)
-    img.save(OUT_PATH, "PNG")
+            draw_capitol(d, cx + 18, 760)
+        tf = load_font(SERIF_B, 29)
+        tlines = wrap(d, title, tf, cw)
+        draw_lines(d, cx, 774, tlines, tf, INK, 33)
+        sf = load_font(SANS, 17)
+        slines = wrap(d, sub, sf, cw)
+        draw_lines(d, cx, 846, slines, sf, INK, 21)
+
+    hline(d, 36, 988, 896, INK, 2)
+
+    # Bottom row: space and weather.
+    vline(d, 512, 906, 970, INK, 1)
+    draw_voyager(d, rng, 36, 906, 156, 970)
+    d.text((168, 906), "SPACE", font=load_font(SANS_B, 15), fill=VERM)
+    d.text((168, 928), "Voyager 1: One Light-Day", font=load_font(SERIF_B, 22), fill=INK)
+    d.text((168, 954), "Farthest human object, 50 years on.",
+           font=load_font(SANS, 16), fill=INK)
+    draw_cyclone(d, 584, 930)
+    d.text((656, 906), "WEATHER", font=load_font(SANS_B, 15), fill=VERM)
+    d.text((656, 928), "Cyclone Akvan Nears India", font=load_font(SERIF_B, 22), fill=INK)
+    d.text((656, 954), "50,000 evacuated in Odisha.",
+           font=load_font(SANS, 16), fill=INK)
+
+    # Footer.
+    hline(d, 36, 988, 980, INK, 2)
+    centered(d, 512, 986, "All six stories first reported on 19 November 2026 · The World Bulletin · Page 1",
+             load_font(SANS, 14), INK)
+
+    # Newsprint grain over the whole page, seeded so it is identical each run.
+    for _ in range(2600):
+        x = rng.randint(24, 1000)
+        y = rng.randint(24, 1000)
+        c = SPECK_DARK if rng.random() < 0.55 else SPECK_LT
+        d.point((x, y), fill=c)
+
+    img.save(out_path, format="PNG", optimize=False)
+
+def main():
+    out_dir = sys.argv[1] if len(sys.argv) > 1 else "/output"
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "entry.png")
+    build(out_path)
+    print("wrote " + out_path)
 
 main()
 `;
 
-function drawWithPython(): boolean {
-  const scriptPath = join(tmpdir(), "world-bulletin-draw.py");
+function main(): void {
+  const outDir = path.resolve(OUT_DIR);
+  fs.mkdirSync(outDir, { recursive: true });
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bulletin-"));
+  const script = path.join(tmp, "draw.py");
+  fs.writeFileSync(script, PY, "utf8");
   try {
-    writeFileSync(scriptPath, DRAW_PY, "utf8");
-  } catch {
-    return false;
+    execFileSync("python3", [script, outDir], { stdio: "inherit" });
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
-  const run = spawnSync("python3", [scriptPath, OUT_DIR], { encoding: "utf8" });
-  if (run.error || run.status !== 0) return false;
-  return existsSync(TARGET);
+  const out = path.join(outDir, "entry.png");
+  const stat = fs.statSync(out);
+  console.log(`wrote ${out} (${stat.size} bytes)`);
 }
 
-function copyShipped(): boolean {
-  const shipped = join(HERE, "entry.png");
-  if (!existsSync(shipped)) return false;
-  try {
-    copyFileSync(shipped, TARGET);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-mkdirSync(OUT_DIR, { recursive: true });
-if (!drawWithPython()) {
-  if (!copyShipped()) {
-    throw new Error("could not produce entry.png");
-  }
-}
+main();
